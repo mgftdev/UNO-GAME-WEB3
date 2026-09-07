@@ -1,26 +1,67 @@
-# UNO-GAME-WEB3
-The task of assignment 1 is to implement the standard rules of UNO as described in the uploaded rule set
+# UNO — WEB3 Assignment 1
 
-UNO is a card game invented by Merle Robbins in 1971. The game can be played by 2 or more players. The game is played as a series of hands. After each hand, the winning player is awarded points (in standard rules). The first to 500 points wins the game.
+Implementation of standard UNO rules in TypeScript, object-oriented, validated
+against the teacher-provided Jest suite.
 
-Each hand is played out as follows:
+## Getting started
 
-1. Every player is dealt 7 cards
+```bash
+npm install
+npm test          # run the suite
+npm run test:watch
+npm run typecheck # tsc --noEmit
+```
 
-2. A card is placed face up in the middle of the table – this forms the discard pile
+## Project structure
 
-3. The remainder of the cards are placed next to the discard pile – this is the draw pile
+```
+src/
+  model/
+    deck.ts    Color, Type, Card union, TypedCard<T>, Deck + UnoDeck,
+               createInitialDeck, createDeckFromMemento, card mementos
+    hand.ts    Hand + UnoHand (a player's cards)
+    round.ts   Round + UnoRound, createRound, createRoundFromMemento
+    uno.ts     Game + UnoGame, createGame, createGameFromMemento
+  utils/
+    random_utils.ts   Randomizer / Shuffler (given, do not change)
+__test__/
+  model/     the 8 given test suites (unmodified)
+  utils/     predicates.ts, shuffling.ts (given), test_adapter.ts (wired up)
+docs/        assignment brief and the official rule set
+```
 
-4. Every player in turn must play a card that matches the card on the top of the discard pile
+The tests import from `src/model/deck`, `src/model/round` and `src/model/uno`,
+so those three file names are fixed. `test_adapter.ts` is already filled in and
+just delegates to the factory functions in those modules.
 
-5. A card is a match if it has the same colour (i.e. blue) or the same type (i.e. same number or same type of special card) as the other card
+## Conventions the tests rely on
 
-6. If a play can’t match the card, they must draw a card instead.
+- A pile is ordered **top first**: index 0 of a `Deck`/memento array is the top
+  card. `deal()` removes the top, `top()`/`peek()` only look.
+- `round.playerHand(i)` must return the **same object** on every call.
+- Mementos are plain JSON objects, and `toMemento()` must round-trip exactly
+  the memento an object was created from (`createX(m).toMemento()` equals `m`).
+- Card score: numbered = face value, SKIP/REVERSE/DRAW = 20, WILD/WILD DRAW = 50.
 
-7. The first player to play their last card wins the hand
+## Suggested order of work
 
-8. The winner is awarded points based on the remaining cards in the other player's hands
-
-9. UNO: Before a player plays their penultimate card, they must say “UNO”. Failure to say “UNO” is liable to a 4-card draw penalty.
-
-On top of that, there are several special cards with different effects. Also, there are a lot of details not covered above. The rules are uploaded to itslearning
+1. `deck.ts` — types, `createInitialDeck` (108 cards), `UnoDeck`, mementos.
+   Makes `deck.test.ts` pass.
+2. `hand.ts` — trivial, but needed by the round.
+3. `round.ts` dealing — `createRound`: shuffle, deal, flip the discard top,
+   reshuffle while it is a wild, apply the top card's effect to pick the first
+   player. Makes `round.start.test.ts` pass.
+4. `round.ts` legality — `canPlay` / `canPlayAny`, including the WILD DRAW
+   restriction (illegal while you hold a card of the current color; a matching
+   *number* or a matching action type does not block it).
+   Makes `round.legal.plays.test.ts` pass.
+5. `round.ts` playing — `play`, `draw`, direction, skip/draw effects, the
+   2-player reverse-as-skip rule, refilling the draw pile from the discard
+   pile. Makes `round.playing.test.ts` pass.
+6. `round.ts` mementos — `createRoundFromMemento` with full validation and
+   `toMemento`. Makes `round.memento.test.ts` pass.
+7. `round.ts` going out — `sayUno`, `catchUnoFailure`, `hasEnded`, `winner`,
+   `score`, `onEnd`. Makes `round.going.out.test.ts` pass.
+8. `uno.ts` — `Game`, scoring across rounds, starting the next round on
+   `onEnd`, target score, mementos. Makes `uno.test.ts` and
+   `uno.memento.test.ts` pass.
