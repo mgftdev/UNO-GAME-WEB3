@@ -1,30 +1,16 @@
 import { Randomizer, Shuffler, standardRandomizer, standardShuffler } from '../../src/utils/random_utils'
-import {
-  Card,
-  Deck,
-  DeckMemento,
-  createDeckFromMemento as deckFromMemento,
-  createInitialDeck as initialDeck,
-} from '../../src/model/deck'
-import {
-  Round,
-  RoundMemento,
-  createRound as newRound,
-  createRoundFromMemento as roundFromMemento,
-} from '../../src/model/round'
-import {
-  Game,
-  GameMemento,
-  createGame as newGame,
-  createGameFromMemento as gameFromMemento,
-} from '../../src/model/uno'
 
+// Fix (or import) these types:
+type Card = any
+type Deck = any
+type Round = any
+type Game = any
+
+//Fill out the empty functions
 export function createInitialDeck(): Deck {
-  return initialDeck()
 }
 
 export function createDeckFromMemento(cards: Record<string, string | number>[]): Deck {
-  return deckFromMemento(cards as DeckMemento)
 }
 
 export type HandConfig = {
@@ -35,16 +21,14 @@ export type HandConfig = {
 }
 
 export function createRound({
-  players,
-  dealer,
-  shuffler = standardShuffler,
-  cardsPerPlayer = 7,
-}: HandConfig): Round {
-  return newRound({ players, dealer, shuffler, cardsPerPlayer })
+    players, 
+    dealer, 
+    shuffler = standardShuffler,
+    cardsPerPlayer = 7
+  }: HandConfig): Round {
 }
 
 export function createRoundFromMemento(memento: any, shuffler: Shuffler<Card> = standardShuffler): Round {
-  return roundFromMemento(memento as RoundMemento, shuffler)
 }
 
 export type GameConfig = {
@@ -56,13 +40,7 @@ export type GameConfig = {
 }
 
 export function createGame(props: Partial<GameConfig>): Game {
-  return newGame(props)
 }
 
-export function createGameFromMemento(
-  memento: any,
-  randomizer: Randomizer = standardRandomizer,
-  shuffler: Shuffler<Card> = standardShuffler
-): Game {
-  return gameFromMemento(memento as GameMemento, randomizer, shuffler)
+export function createGameFromMemento(memento: any, randomizer: Randomizer = standardRandomizer, shuffler: Shuffler<Card> = standardShuffler): Game {
 }
