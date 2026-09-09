@@ -1,4 +1,4 @@
-import { Card } from "../../src/model/deck"
+import { Card } from "../../src/model/deck/deck"
 import { Round } from "../../src/model/round"
 import { Shuffler, standardShuffler } from "../../src/utils/random_utils"
 import { CardPredicate, CardSpec, is, not } from "./predicates"
