@@ -51,7 +51,7 @@ export class StandardRound {
 
     private validatePlayerIndex(index: number): void {
         if (index < 0 || index >= this.playerCount) {
-            throw new Error("Player index out of bounds");
+            throw new Error("player index out of bounds");
         }
     }
 
@@ -68,6 +68,51 @@ export class StandardRound {
         }
     }
 
+	private nextIndex(from: number, steps: number = 1): number {
+    	const direction = this.currentDirection === "clockwise" ? 1 : -1;
+    	return (from + direction * steps + this.playerCount * 10) % this.playerCount;
+	}
+
+	//if draw pile empty - rebuild
+	private rebuildDrawPileIfNeeded(): void {
+    	if (this.drawPileStack.length > 0) return;
+
+    	if (this.discardPileStack.length <= 1) {
+        	throw new Error("Cannot draw: no cards available");
+    	}
+
+    	// keep discard top card, recycle rest into draw pile
+    	const top = this.discardPileStack.pop() as Card;
+    	const recycled = this.discardPileStack.splice(0);
+
+    	// shuffle
+    	for (let i = recycled.length - 1; i > 0; i--) {
+        	const j = Math.floor(Math.random() * (i + 1));
+        	const temp = recycled[i];
+        	recycled[i] = recycled[j];
+        	recycled[j] = temp;
+    	}
+
+    	this.drawPileStack.push(...recycled);
+    	this.discardPileStack.push(top);
+	}
+
+	private drawOneCard(): Card {
+    	this.rebuildDrawPileIfNeeded();
+    	const card = this.drawPileStack.pop();
+    	if (card === undefined) {
+        	throw new Error("Cannot draw: draw pile is empty");
+    	}
+    	return card;
+	}
+
+	// for draw and wild draw
+	private giveCards(playerIndex: number, count: number): void {
+		for (let i = 0; i < count; i++) {
+			this.hands[playerIndex].push(this.drawOneCard());
+		}
+	}
+	
     player(index: number): string {
         this.validatePlayerIndex(index);
         return this.playerNames[index];
@@ -78,26 +123,46 @@ export class StandardRound {
         return this.hands[index];
     }
 
-    discardPile(): { top(): Card; size: number; push(card: Card): void } {
-        return {
-            top: () => this.discardPileStack[this.discardPileStack.length - 1],
-            size: this.discardPileStack.length,
-            push: (card: Card) => this.discardPileStack.push(card),
-        };
-    }
+	discardPile(): { top(): Card; size: number; push(card: Card): void } {
+		const round = this;
+		return {
+			top: () => {
+				const card = round.discardPileStack[this.discardPileStack.length - 1];
+				if (card === undefined) {
+					throw new Error("Discard pile is empty");
+				}
+				return card;
+			},
+			get size() {
+				return round.discardPileStack.length;
+			},
+			push: (card: Card) => round.discardPileStack.push(card),
+		};
+	}
 
-    drawPile(): { deal(): Card; peek(): Card; size: number } {
-        return {
-            deal: () => this.drawPileStack.pop() as Card,
-            peek: () => this.drawPileStack[this.drawPileStack.length - 1],
-            size: this.drawPileStack.length,
-        };
-    }
+	drawPile(): { deal(): Card; peek(): Card; size: number } {
+		const round = this;
+		return {
+			deal: () => round.drawOneCard(),
+			peek: () => {
+				round.rebuildDrawPileIfNeeded();
+				const card = round.drawPileStack[this.drawPileStack.length - 1];
+				if (card === undefined) {
+					throw new Error("Draw pile is empty");
+				}
+				return card;
+			},
+			get size() {
+				return round.drawPileStack.length;
+			},
+		};
+	}
 
     playerInTurn(): number {
         return this.playerInTurnIndex;
     }
 
+	 // true if player has at least one legal move at the moment
     canPlay(playerIndex: number): boolean {
         this.validatePlayerIndex(playerIndex);
 
@@ -107,30 +172,32 @@ export class StandardRound {
         return hand.some((_, cardIndex) => isLegalPlay(hand, cardIndex, topCard, this.currentColor));
     }
 
-    canPlayAny(): boolean {
-        return this.canPlay(this.playerInTurnIndex);
-    }
+	canPlayAny(): boolean {
+		const current = this.playerInTurnIndex;
+		if (current < 0 || current >= this.playerCount) return false;
+		return this.canPlay(current);
+	}
 
     play(cardIndex: number, chosenColor?: Color): Card {
         const player = this.playerInTurn();
         const hand = this.hands[player];
 
         if (cardIndex < 0 || cardIndex >= hand.length) {
-            throw new Error("Card index out of bounds");
+            throw new Error("card index out of bounds");
         }
 
         const card = hand[cardIndex];
         const topCard = this.discardPileStack[this.discardPileStack.length - 1];
 
         if ((card.type === "WILD" || card.type === "WILD DRAW") && chosenColor === undefined) {
-            throw new Error("Wild cards require a chosen color");
+            throw new Error("wild cards need a chosen color");
         }
 
         if (
             (card.type !== "WILD" && card.type !== "WILD DRAW") &&
             chosenColor !== undefined
         ) {
-            throw new Error("Only wild cards may choose a color");
+            throw new Error("Only wild cards can choose a color");
         }
 
         if (!isLegalPlay(hand, cardIndex, topCard, this.currentColor)) {
@@ -150,81 +217,57 @@ export class StandardRound {
             this.currentColor = card.color;
         }
 
-        // minimal action handling
-        if (card.type === "REVERSE") {
-            if (this.playerCount === 2) {
-                // 2 player rule - reverse acts like skip
-                this.advanceTurn(1);
-            } else {
-                this.currentDirection =
-                    this.currentDirection === "clockwise" ? "counterclockwise" : "clockwise";
-                this.advanceTurn(1);
-            }
-            return card;
-        }
+        // action handling
+		if (card.type === "REVERSE") {
+			if (this.playerCount === 2) {
+				// 2 player rule - reverse skips
+				this.advanceTurn(2);
+			} else {
+				this.currentDirection =
+					this.currentDirection === "clockwise" ? "counterclockwise" : "clockwise";
+				this.advanceTurn(1);
+			}
+			return card;
+		}
 
-        if (card.type === "SKIP") {
-            this.advanceTurn(2);
-            return card;
-        }
+		if (card.type === "SKIP") {
+			this.advanceTurn(2);
+			return card;
+		}
 
-        if (card.type === "DRAW") {
-            const nextPlayer = (this.playerInTurnIndex + 1) % this.playerCount;
-            for (let i = 0; i < 2; i++) {
-                const drawn = this.drawPileStack.pop();
-                if (drawn) {
-                    this.hands[nextPlayer].push(drawn);
-                }
-            }
-            this.advanceTurn(2);
-            return card;
-        }
+		if (card.type === "DRAW") {
+			const nextPlayer = this.nextIndex(this.playerInTurnIndex, 1);
+			this.giveCards(nextPlayer, 2);
+			this.advanceTurn(2);
+			return card;
+		}
 
-        if (card.type === "WILD DRAW") {
-            const nextPlayer = (this.playerInTurnIndex + 1) % this.playerCount;
-            for (let i = 0; i < 4; i++) {
-                const drawn = this.drawPileStack.pop();
-                if (drawn) {
-                    this.hands[nextPlayer].push(drawn);
-                }
-            }
-            this.advanceTurn(2);
-            return card;
-        }
+		if (card.type === "WILD DRAW") {
+			const nextPlayer = this.nextIndex(this.playerInTurnIndex, 1);
+			this.giveCards(nextPlayer, 4);
+			this.advanceTurn(2);
+			return card;
+		}
 
-        // normal card
-        this.advanceTurn(1);
-        return card;
+		// normal card - pass turn
+		this.advanceTurn(1);
+		return card;
     }
 
-    draw(): Card {
-        if (this.drawPileStack.length === 0) {
-            const topCard = this.discardPileStack.pop();
-            if (topCard === undefined) {
-                throw new Error("Cannot draw from an empty draw pile");
-            }
+	draw(): Card {
+		const currentPlayer = this.playerInTurnIndex;
+		const drawn = this.drawOneCard();
+		this.hands[currentPlayer].push(drawn);
 
-            const rest = this.discardPileStack.splice(0);
-            this.discardPileStack.length = 0;
-            this.discardPileStack.push(topCard);
+		const topCard = this.discardPileStack[this.discardPileStack.length - 1];
+		if (!isLegalPlay(this.hands[currentPlayer], this.hands[currentPlayer].length - 1, topCard, this.currentColor)) {
+			this.advanceTurn(1);
+		}
 
-            for (const card of rest) {
-                this.drawPileStack.push(card);
-            }
-        }
+		return drawn;
+	}
 
-        const drawn = this.drawPileStack.pop() as Card;
-        const currentPlayer = this.playerInTurnIndex;
-        this.hands[currentPlayer].push(drawn);
-
-        const topCard = this.discardPileStack[this.discardPileStack.length - 1];
-        if (!isLegalPlay(this.hands[currentPlayer], this.hands[currentPlayer].length - 1, topCard, this.currentColor)) {
-            this.advanceTurn(1);
-        }
-
-        return drawn;
-    }
-
+	// winner when empty hand
     winner(): number | undefined {
         for (let i = 0; i < this.playerCount; i++) {
             if (this.hands[i].length === 0) {
