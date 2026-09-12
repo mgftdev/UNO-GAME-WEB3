@@ -1,4 +1,5 @@
-export * from './round/round'
-export * from './round/turn-order'
-export * from './round/play-legality'
-export * from './round/standard-round'
+export * from "./standard-round";
+export * from "./play-legality";
+
+/** The tests import a `Round` type from this module. */
+export type { StandardRound as Round } from "./standard-round";

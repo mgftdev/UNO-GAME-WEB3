@@ -1,5 +1,8 @@
-import { Card } from "../cards/card";
+import { Card, cardScore, ColoredCard } from "../cards/card";
 import { Color } from "../cards/color";
+import { isColored } from "../cards/predicates";
+import { fullDeckCards } from "../deck/deck-factory";
+import { Shuffler, standardShuffler } from "../../utils/random_utils";
 import { isLegalPlay } from "./play-legality";
 
 export type Direction = "clockwise" | "counterclockwise";
@@ -15,12 +18,17 @@ export type RoundMemento = {
     playerInTurn: number;
 };
 
+export type RoundEndEvent = { winner: number };
+export type RoundEndCallback = (event: RoundEndEvent) => void;
+
 export class StandardRound {
     readonly playerNames: readonly string[];
     readonly dealer: number;
     private readonly hands: Card[][];
     private readonly drawPileStack: Card[];
     private readonly discardPileStack: Card[];
+    private readonly shuffler: Shuffler<Card>;
+    private readonly endCallbacks: RoundEndCallback[] = [];
     private currentColor: Color;
     private currentDirection: Direction;
     private playerInTurnIndex: number;
@@ -34,6 +42,7 @@ export class StandardRound {
         currentColor: Color,
         currentDirection: Direction,
         playerInTurn: number,
+        shuffler: Shuffler<Card> = standardShuffler,
     ) {
         this.playerNames = players;
         this.dealer = dealer;
@@ -43,6 +52,61 @@ export class StandardRound {
         this.currentColor = currentColor;
         this.currentDirection = currentDirection;
         this.playerInTurnIndex = playerInTurn;
+        this.shuffler = shuffler;
+    }
+
+    static create(
+        players: string[],
+        dealer: number,
+        shuffler: Shuffler<Card> = standardShuffler,
+        cardsPerPlayer: number = 7,
+    ): StandardRound {
+        if (players.length < 2) throw new Error("a round needs at least 2 players");
+        if (players.length > 10) throw new Error("a round allows at most 10 players");
+
+        const deck = fullDeckCards();
+        shuffler(deck);
+
+        const hands: Card[][] = [];
+        for (let player = 0; player < players.length; player++) {
+            hands.push(deck.splice(0, cardsPerPlayer));
+        }
+
+        let startingCard = deck.shift();
+        while (startingCard !== undefined && !isColored(startingCard)) {
+            deck.push(startingCard);
+            shuffler(deck);
+            startingCard = deck.shift();
+        }
+        if (startingCard === undefined) throw new Error("not enough cards to start the round");
+
+        const round = new StandardRound(
+            [...players],
+            dealer,
+            hands,
+            deck,
+            [startingCard],
+            startingCard.color,
+            "clockwise",
+            (dealer + 1) % players.length,
+            shuffler,
+        );
+        round.applyStartingCard(startingCard);
+        return round;
+    }
+
+    static fromMemento(memento: RoundMemento, shuffler: Shuffler<Card> = standardShuffler): StandardRound {
+        return new StandardRound(
+            [...memento.players],
+            memento.dealer,
+            memento.hands.map((hand) => [...hand]),
+            [...memento.drawPile],
+            [...memento.discardPile],
+            memento.currentColor,
+            memento.currentDirection,
+            memento.playerInTurn,
+            shuffler,
+        );
     }
 
     get playerCount(): number {
@@ -77,21 +141,14 @@ export class StandardRound {
 	private rebuildDrawPileIfNeeded(): void {
     	if (this.drawPileStack.length > 0) return;
 
-    	if (this.discardPileStack.length <= 1) {
-        	throw new Error("Cannot draw: no cards available");
-    	}
+    	// nothing to recycle yet - the discard pile only holds the card in play
+    	if (this.discardPileStack.length <= 1) return;
 
     	// keep discard top card, recycle rest into draw pile
-    	const top = this.discardPileStack.pop() as Card;
+    	const top = this.discardPileStack.shift() as Card;
     	const recycled = this.discardPileStack.splice(0);
 
-    	// shuffle
-    	for (let i = recycled.length - 1; i > 0; i--) {
-        	const j = Math.floor(Math.random() * (i + 1));
-        	const temp = recycled[i];
-        	recycled[i] = recycled[j];
-        	recycled[j] = temp;
-    	}
+    	this.shuffler(recycled);
 
     	this.drawPileStack.push(...recycled);
     	this.discardPileStack.push(top);
@@ -99,10 +156,12 @@ export class StandardRound {
 
 	private drawOneCard(): Card {
     	this.rebuildDrawPileIfNeeded();
-    	const card = this.drawPileStack.pop();
+    	const card = this.drawPileStack.shift();
     	if (card === undefined) {
-        	throw new Error("Cannot draw: draw pile is empty");
+        	throw new Error("Cannot draw: no cards available");
     	}
+    	// refill straight away, so the pile is never left empty
+    	this.rebuildDrawPileIfNeeded();
     	return card;
 	}
 
@@ -112,7 +171,7 @@ export class StandardRound {
 			this.hands[playerIndex].push(this.drawOneCard());
 		}
 	}
-	
+
     player(index: number): string {
         this.validatePlayerIndex(index);
         return this.playerNames[index];
@@ -127,7 +186,7 @@ export class StandardRound {
 		const round = this;
 		return {
 			top: () => {
-				const card = round.discardPileStack[this.discardPileStack.length - 1];
+				const card = round.discardPileStack[0];
 				if (card === undefined) {
 					throw new Error("Discard pile is empty");
 				}
@@ -136,50 +195,49 @@ export class StandardRound {
 			get size() {
 				return round.discardPileStack.length;
 			},
-			push: (card: Card) => round.discardPileStack.push(card),
+			push: (card: Card) => round.discardPileStack.unshift(card),
 		};
 	}
 
-	drawPile(): { deal(): Card; peek(): Card; size: number } {
+	// a plain view on the pile - recycling only happens through the round's own draw
+	drawPile(): { deal(): Card | undefined; peek(): Card | undefined; size: number } {
 		const round = this;
 		return {
-			deal: () => round.drawOneCard(),
-			peek: () => {
-				round.rebuildDrawPileIfNeeded();
-				const card = round.drawPileStack[this.drawPileStack.length - 1];
-				if (card === undefined) {
-					throw new Error("Draw pile is empty");
-				}
-				return card;
-			},
+			deal: () => round.drawPileStack.shift(),
+			peek: () => round.drawPileStack[0],
 			get size() {
 				return round.drawPileStack.length;
 			},
 		};
 	}
 
-    playerInTurn(): number {
-        return this.playerInTurnIndex;
+    playerInTurn(): number | undefined {
+        return this.hasEnded() ? undefined : this.playerInTurnIndex;
     }
 
-	 // true if player has at least one legal move at the moment
-    canPlay(playerIndex: number): boolean {
-        this.validatePlayerIndex(playerIndex);
+	 // true if the player in turn may legally play the card at this index
+    canPlay(cardIndex: number): boolean {
+        if (this.hasEnded()) return false;
 
-        const hand = this.hands[playerIndex];
-        const topCard = this.discardPileStack[this.discardPileStack.length - 1];
+        const hand = this.hands[this.playerInTurnIndex];
+        if (cardIndex < 0 || cardIndex >= hand.length) return false;
 
-        return hand.some((_, cardIndex) => isLegalPlay(hand, cardIndex, topCard, this.currentColor));
+        const topCard = this.discardPileStack[0];
+        return isLegalPlay(hand, cardIndex, topCard, this.currentColor);
     }
 
+	// true if the player in turn has at least one legal move
 	canPlayAny(): boolean {
-		const current = this.playerInTurnIndex;
-		if (current < 0 || current >= this.playerCount) return false;
-		return this.canPlay(current);
+		if (this.hasEnded()) return false;
+		return this.hands[this.playerInTurnIndex].some((_, cardIndex) => this.canPlay(cardIndex));
 	}
 
     play(cardIndex: number, chosenColor?: Color): Card {
-        const player = this.playerInTurn();
+        if (this.hasEnded()) {
+            throw new Error("the round has ended");
+        }
+
+        const player = this.playerInTurnIndex;
         const hand = this.hands[player];
 
         if (cardIndex < 0 || cardIndex >= hand.length) {
@@ -187,7 +245,7 @@ export class StandardRound {
         }
 
         const card = hand[cardIndex];
-        const topCard = this.discardPileStack[this.discardPileStack.length - 1];
+        const topCard = this.discardPileStack[0];
 
         if ((card.type === "WILD" || card.type === "WILD DRAW") && chosenColor === undefined) {
             throw new Error("wild cards need a chosen color");
@@ -208,7 +266,7 @@ export class StandardRound {
         hand.splice(cardIndex, 1);
 
         // add it to discard pile
-        this.discardPileStack.push(card);
+        this.discardPileStack.unshift(card);
 
         // set current color
         if (card.type === "WILD" || card.type === "WILD DRAW") {
@@ -217,6 +275,16 @@ export class StandardRound {
             this.currentColor = card.color;
         }
 
+        this.applyEffect(card);
+
+        if (hand.length === 0) {
+            this.endRound(player);
+        }
+
+        return card;
+    }
+
+    private applyEffect(card: Card): void {
         // action handling
 		if (card.type === "REVERSE") {
 			if (this.playerCount === 2) {
@@ -227,39 +295,71 @@ export class StandardRound {
 					this.currentDirection === "clockwise" ? "counterclockwise" : "clockwise";
 				this.advanceTurn(1);
 			}
-			return card;
+			return;
 		}
 
 		if (card.type === "SKIP") {
 			this.advanceTurn(2);
-			return card;
+			return;
 		}
 
 		if (card.type === "DRAW") {
 			const nextPlayer = this.nextIndex(this.playerInTurnIndex, 1);
 			this.giveCards(nextPlayer, 2);
 			this.advanceTurn(2);
-			return card;
+			return;
 		}
 
 		if (card.type === "WILD DRAW") {
 			const nextPlayer = this.nextIndex(this.playerInTurnIndex, 1);
 			this.giveCards(nextPlayer, 4);
 			this.advanceTurn(2);
-			return card;
+			return;
 		}
 
 		// normal card - pass turn
 		this.advanceTurn(1);
-		return card;
+    }
+
+    private applyStartingCard(card: ColoredCard): void {
+        switch (card.type) {
+            case "REVERSE":
+                if (this.playerCount === 2) {
+                    this.advanceTurn(1);
+                } else {
+                    this.currentDirection = "counterclockwise";
+                    this.advanceTurn(2);
+                }
+                break;
+            case "SKIP":
+                this.advanceTurn(1);
+                break;
+            case "DRAW":
+                this.giveCards(this.playerInTurnIndex, 2);
+                this.advanceTurn(1);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private endRound(winner: number): void {
+        const event: RoundEndEvent = { winner };
+        for (const callback of [...this.endCallbacks]) {
+            callback(event);
+        }
     }
 
 	draw(): Card {
+        if (this.hasEnded()) {
+            throw new Error("the round has ended");
+        }
+
 		const currentPlayer = this.playerInTurnIndex;
 		const drawn = this.drawOneCard();
 		this.hands[currentPlayer].push(drawn);
 
-		const topCard = this.discardPileStack[this.discardPileStack.length - 1];
+		const topCard = this.discardPileStack[0];
 		if (!isLegalPlay(this.hands[currentPlayer], this.hands[currentPlayer].length - 1, topCard, this.currentColor)) {
 			this.advanceTurn(1);
 		}
@@ -275,6 +375,28 @@ export class StandardRound {
             }
         }
         return undefined;
+    }
+
+    hasEnded(): boolean {
+        return this.winner() !== undefined;
+    }
+
+    // points the winner collects from everyone else's remaining cards
+    score(): number | undefined {
+        const winner = this.winner();
+        if (winner === undefined) return undefined;
+
+        return this.hands.reduce(
+            (total, hand, player) =>
+                player === winner
+                    ? total
+                    : total + hand.reduce((sum, card) => sum + cardScore(card), 0),
+            0,
+        );
+    }
+
+    onEnd(callback: RoundEndCallback): void {
+        this.endCallbacks.push(callback);
     }
 
     toMemento(): RoundMemento {
